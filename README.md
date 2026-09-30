@@ -12,6 +12,11 @@ Windows 桌面工具，使用系统 FFmpeg 对视频进行开头/结尾裁剪、
 - 输出目录默认跟随源视频，也可以手动指定其他目录。
 - 原视频始终保留。
 
+## 下载
+
+GitHub Releases 提供打包版下载：
+
+https://github.com/Colmi/video-fast-cut/releases
 ## 快速开始
 
 运行打包版：
@@ -50,6 +55,8 @@ vendor\          vendored 第三方运行库
 - 64 位 Windows
 - 系统 FFmpeg；程序会自动检测或允许手动指定
 - 运行源码版需要 Python 3.10 及以上
+
+
 
 
 
