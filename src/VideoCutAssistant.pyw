@@ -888,7 +888,7 @@ class VideoCutApp:
         self.end_seconds_spin.grid(row=1, column=1, sticky="e", padx=(8, 3), pady=3)
         ttk.Label(tasks, text="秒").grid(row=1, column=2, sticky="w", pady=3)
         self.end_preview_button = ttk.Button(
-            tasks, text="取预览", command=lambda: self.use_preview_time_for(self.end_seconds_var)
+            tasks, text="取预览", command=self.use_end_trim_from_preview
         )
         self.end_preview_button.grid(row=1, column=3, padx=(8, 0), pady=3)
 
@@ -1496,6 +1496,14 @@ class VideoCutApp:
     def use_preview_time_for(self, variable: tk.StringVar) -> None:
         seconds = max(0.0, self.preview_time_var.get())
         variable.set(f"{seconds:.3f}".rstrip("0").rstrip("."))
+
+    def use_end_trim_from_preview(self) -> None:
+        if not self.video_info:
+            return
+        duration = max(float(self.video_info.get("duration") or 0.0), 0.0)
+        preview_seconds = max(0.0, min(self.preview_time_var.get(), duration))
+        trim_seconds = max(0.0, duration - preview_seconds)
+        self.end_seconds_var.set(f"{trim_seconds:.3f}".rstrip("0").rstrip("."))
 
     def _refresh_preview_frame(self) -> None:
         self.preview_after_id = None

@@ -22,7 +22,7 @@ https://github.com/Colmi/video-fast-cut/releases
 运行打包版：
 
 ```text
-release\VideoCutAssistant.exe
+release\VideoCutAssistant-v1.0.1.exe
 ```
 
 运行源码版：
@@ -42,6 +42,7 @@ release\         发布版 EXE
 src\             主程序源码
 tools\           构建脚本
 vendor\          vendored 第三方运行库
+VERSION         版本号
 ```
 
 ## 文档
@@ -55,6 +56,7 @@ vendor\          vendored 第三方运行库
 - 64 位 Windows
 - 系统 FFmpeg；程序会自动检测或允许手动指定
 - 运行源码版需要 Python 3.10 及以上
+
 
 
 

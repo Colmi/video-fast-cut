@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$KeepBuild
 )
@@ -10,6 +10,11 @@ $Icon = Join-Path $Root "assets\logo.ico"
 $Vendor = Join-Path $Root "vendor"
 $Release = Join-Path $Root "release"
 $Build = Join-Path $Root "build"
+$Version = (Get-Content (Join-Path $Root "VERSION") -Raw).Trim()
+if (-not $Version) {
+    throw "VERSION file is empty."
+}
+$OutputName = "VideoCutAssistant-v" + $Version
 
 $OriginalLocation = Get-Location
 $BuildSucceeded = $false
@@ -19,7 +24,7 @@ try {
 
     & python -c "import PyInstaller" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "未安装 PyInstaller。请先运行：python -m pip install -r requirements-dev.txt"
+        throw "PyInstaller is not installed. Run: python -m pip install -r requirements-dev.txt"
     }
 
     & python -m PyInstaller `
@@ -27,7 +32,7 @@ try {
         --clean `
         --onefile `
         --windowed `
-        --name "VideoCutAssistant" `
+        --name $OutputName `
         --icon $Icon `
         --paths $Vendor `
         --hidden-import "tkinterdnd2" `
@@ -38,11 +43,11 @@ try {
         $Source
 
     if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller 构建失败，退出代码：$LASTEXITCODE"
+        throw "PyInstaller failed with exit code: $LASTEXITCODE"
     }
     $BuildSucceeded = $true
     Write-Host ""
-    Write-Host "构建完成：$Release\VideoCutAssistant.exe" -ForegroundColor Green
+    Write-Host ("Build complete: {0}\{1}.exe" -f $Release, $OutputName) -ForegroundColor Green
 }
 finally {
     Set-Location $OriginalLocation
@@ -50,5 +55,3 @@ finally {
         Remove-Item -LiteralPath $Build -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-
-
