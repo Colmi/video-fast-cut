@@ -475,16 +475,12 @@ def build_operation_command(
         command += ["-ss", f"{start_seconds:.6f}"]
 
     stream_details = video_info.get("stream_details") or []
-    mp4_conversion = (
-        output_path.suffix.lower() in MP4_CONTAINER_EXTENSIONS
-        and input_path.suffix.lower() not in MP4_CONTAINER_EXTENSIONS
-        and bool(stream_details)
-    )
+    mp4_output = output_path.suffix.lower() in MP4_CONTAINER_EXTENSIONS
     audio_details: list[dict] = []
     text_subtitle_details: list[dict] = []
     mapped_video_count = max(int(video_info.get("video_stream_count") or 1), 1)
 
-    if mp4_conversion:
+    if mp4_output and stream_details:
         main_video_index = video_info.get("main_video_index")
         if isinstance(main_video_index, int):
             command += ["-map", f"0:{main_video_index}"]
@@ -500,6 +496,12 @@ def build_operation_command(
             command += ["-map", f"0:{item['index']}"]
         for item in text_subtitle_details:
             command += ["-map", f"0:{item['index']}"]
+        if has_cover:
+            command += ["-map", "1:v:0"]
+        mapped_video_count = 1
+    elif mp4_output:
+        # 没有 ffprobe 流信息时采用保守映射，绝不使用 -map 0 带入未知数据流。
+        command += ["-map", "0:v:0", "-map", "0:a?"]
         if has_cover:
             command += ["-map", "1:v:0"]
         mapped_video_count = 1
@@ -523,15 +525,19 @@ def build_operation_command(
             0,
         )
 
-    if mp4_conversion:
-        for audio_index, item in enumerate(audio_details):
-            if item.get("codec_name") not in MP4_AUDIO_COPY_CODECS:
-                command += [
-                    f"-c:a:{audio_index}", "aac",
-                    f"-b:a:{audio_index}", "192k",
-                ]
-        for subtitle_index, _item in enumerate(text_subtitle_details):
-            command += [f"-c:s:{subtitle_index}", "mov_text"]
+    if mp4_output:
+        if stream_details:
+            for audio_index, item in enumerate(audio_details):
+                if item.get("codec_name") not in MP4_AUDIO_COPY_CODECS:
+                    command += [
+                        f"-c:a:{audio_index}", "aac",
+                        f"-b:a:{audio_index}", "192k",
+                    ]
+            for subtitle_index, _item in enumerate(text_subtitle_details):
+                command += [f"-c:s:{subtitle_index}", "mov_text"]
+        else:
+            # 无法确认音频编码时统一转为广泛兼容的 AAC。
+            command += ["-c:a", "aac", "-b:a", "192k"]
 
     if has_cut:
         command += ["-t", f"{remaining_duration:.6f}"]
@@ -1500,6 +1506,11 @@ class VideoCutApp:
         info = self.video_info or {}
         details = info.get("stream_details") or []
         video_codec = (info.get("video_codec") or "").lower()
+        if not details:
+            self.container_hint_var.set(
+                "未获取到完整流信息：MP4 转换将只保留主视频和音频，音频统一转 AAC，字幕和附件不写入。"
+            )
+            return
         if video_codec and video_codec not in {"h264", "avc1"} and not self.precise_var.get():
             self.container_hint_var.set(
                 "当前主视频不是 AVC/H.264。流复制到 MP4 可能不兼容，建议保持源格式或启用精确裁剪。"
@@ -1921,7 +1932,7 @@ class VideoCutApp:
 
         if self.output_format_var.get() == OUTPUT_FORMAT_MP4:
             video_codec = (self.video_info.get("video_codec") or "").lower()
-            if video_codec not in {"h264", "avc1"} and not self.precise_var.get():
+            if video_codec and video_codec not in {"h264", "avc1"} and not self.precise_var.get():
                 raise ValueError(
                     "转换为 MP4 时，快速模式目前要求主视频为 AVC/H.264。"
                     "请保持源格式，或勾选精确裁剪。"
