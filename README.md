@@ -10,6 +10,8 @@ Windows 桌面工具，使用系统 FFmpeg 对视频进行开头/结尾裁剪、
 - 自动检测或手动指定 FFmpeg，显示当前版本和路径。
 - 实时显示当前操作对应的 FFmpeg 指令。
 - 输出目录默认跟随源视频，也可以手动指定其他目录。
+- 支持将 MKV 中 AVC/H.264 主视频快速转换为 MP4。
+- MP4 转换时自动处理不兼容音频和文本字幕。
 - 原视频始终保留。
 
 ## 下载
@@ -22,7 +24,7 @@ https://github.com/Colmi/video-fast-cut/releases
 运行打包版：
 
 ```text
-release\VideoCutAssistant-v1.0.1.exe
+release\VideoCutAssistant-v1.1.0.exe
 ```
 
 运行源码版：
@@ -56,6 +58,7 @@ VERSION         版本号
 - 64 位 Windows
 - 系统 FFmpeg；程序会自动检测或允许手动指定
 - 运行源码版需要 Python 3.10 及以上
+
 
 
 

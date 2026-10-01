@@ -46,6 +46,11 @@ VIDEO_EXTENSIONS = {
     ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".vob", ".ogv", ".3gp",
 }
 COVER_EXTENSIONS = {".mp4", ".m4v", ".mov"}
+MP4_CONTAINER_EXTENSIONS = {".mp4", ".m4v", ".mov"}
+MP4_AUDIO_COPY_CODECS = {"aac", "mp3", "ac3", "eac3", "alac"}
+TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt"}
+OUTPUT_FORMAT_KEEP = "保持源格式"
+OUTPUT_FORMAT_MP4 = "转换为 MP4"
 PREVIEW_FPS = 8
 PREVIEW_SECONDS = 20
 PREVIEW_QUALITY_OPTIONS = {
@@ -239,6 +244,7 @@ def output_path_for(
     remove_end: bool = False,
     set_cover: bool = False,
     output_dir: Optional[Path] = None,
+    output_extension: Optional[str] = None,
 ) -> Path:
     suffixes: list[str] = []
     if remove_start or remove_end:
@@ -248,7 +254,10 @@ def output_path_for(
     if not suffixes:
         suffixes.append("-processed")
     target_dir = Path(output_dir) if output_dir else video_path.parent
-    return target_dir / f"{video_path.stem}{''.join(suffixes)}{video_path.suffix}"
+    extension = output_extension or video_path.suffix
+    if not extension.startswith("."):
+        extension = "." + extension
+    return target_dir / f"{video_path.stem}{''.join(suffixes)}{extension}"
 
 def parse_float(value: object) -> Optional[float]:
     try:
@@ -275,6 +284,7 @@ def probe_video(video_path: Path) -> dict:
             "main_video_index": None,
             "video_stream_count": 1,
             "stream_indexes": [],
+            "stream_details": [],
         }
 
     command = [
@@ -299,14 +309,23 @@ def probe_video(video_path: Path) -> dict:
     video_stream_count = 0
     audio_streams = 0
     stream_indexes: list[int] = []
+    stream_details: list[dict] = []
 
     for stream in streams:
         index = stream.get("index")
         codec_type = stream.get("codec_type")
+        codec_name = stream.get("codec_name")
         disposition = stream.get("disposition") or {}
         is_attached_picture = bool(disposition.get("attached_pic"))
         if isinstance(index, int) and not is_attached_picture:
             stream_indexes.append(index)
+            stream_details.append(
+                {
+                    "index": index,
+                    "codec_type": codec_type,
+                    "codec_name": (codec_name or "").lower(),
+                }
+            )
         if codec_type == "audio":
             audio_streams += 1
         if codec_type == "video" and not is_attached_picture:
@@ -346,6 +365,7 @@ def probe_video(video_path: Path) -> dict:
         "main_video_index": main_video_index,
         "video_stream_count": max(video_stream_count, 1),
         "stream_indexes": stream_indexes,
+        "stream_details": stream_details,
     }
 
 
@@ -454,7 +474,36 @@ def build_operation_command(
     if remove_start is not None and not (has_cover and remove_start is not None):
         command += ["-ss", f"{start_seconds:.6f}"]
 
-    if has_cover:
+    stream_details = video_info.get("stream_details") or []
+    mp4_conversion = (
+        output_path.suffix.lower() in MP4_CONTAINER_EXTENSIONS
+        and input_path.suffix.lower() not in MP4_CONTAINER_EXTENSIONS
+        and bool(stream_details)
+    )
+    audio_details: list[dict] = []
+    text_subtitle_details: list[dict] = []
+    mapped_video_count = max(int(video_info.get("video_stream_count") or 1), 1)
+
+    if mp4_conversion:
+        main_video_index = video_info.get("main_video_index")
+        if isinstance(main_video_index, int):
+            command += ["-map", f"0:{main_video_index}"]
+        else:
+            command += ["-map", "0:v:0"]
+        audio_details = [item for item in stream_details if item.get("codec_type") == "audio"]
+        text_subtitle_details = [
+            item for item in stream_details
+            if item.get("codec_type") == "subtitle"
+            and item.get("codec_name") in TEXT_SUBTITLE_CODECS
+        ]
+        for item in audio_details:
+            command += ["-map", f"0:{item['index']}"]
+        for item in text_subtitle_details:
+            command += ["-map", f"0:{item['index']}"]
+        if has_cover:
+            command += ["-map", "1:v:0"]
+        mapped_video_count = 1
+    elif has_cover:
         stream_indexes = video_info.get("stream_indexes") or []
         if stream_indexes:
             for index in stream_indexes:
@@ -474,11 +523,21 @@ def build_operation_command(
             0,
         )
 
+    if mp4_conversion:
+        for audio_index, item in enumerate(audio_details):
+            if item.get("codec_name") not in MP4_AUDIO_COPY_CODECS:
+                command += [
+                    f"-c:a:{audio_index}", "aac",
+                    f"-b:a:{audio_index}", "192k",
+                ]
+        for subtitle_index, _item in enumerate(text_subtitle_details):
+            command += [f"-c:s:{subtitle_index}", "mov_text"]
+
     if has_cut:
         command += ["-t", f"{remaining_duration:.6f}"]
 
     if has_cover:
-        cover_video_index = max(int(video_info.get("video_stream_count") or 1), 1)
+        cover_video_index = mapped_video_count
         command += [
             "-disposition:v:" + str(cover_video_index), "attached_pic",
             "-metadata:s:v:" + str(cover_video_index), "title=Cover",
@@ -486,6 +545,8 @@ def build_operation_command(
         ]
 
     command += ["-map_metadata", "0", "-map_chapters", "0"]
+    if output_path.suffix.lower() in MP4_CONTAINER_EXTENSIONS:
+        command += ["-movflags", "+faststart"]
     # 组合模式下 accurate_seek 已统一时间轴；再归零会重新拉长输出时长。
     if not (has_cover and remove_start is not None):
         command += ["-avoid_negative_ts", "make_zero"]
@@ -612,6 +673,8 @@ class VideoCutApp:
         self.output_var = tk.StringVar(value="")
         self.output_dir_var = tk.StringVar(value="")
         self.use_source_dir_var = tk.BooleanVar(value=True)
+        self.output_format_var = tk.StringVar(value=OUTPUT_FORMAT_KEEP)
+        self.container_hint_var = tk.StringVar(value="")
         self.info_var = tk.StringVar(value="请选择视频文件。")
         self.status_var = tk.StringVar(value="就绪")
         self.progress_var = tk.DoubleVar(value=0.0)
@@ -651,8 +714,6 @@ class VideoCutApp:
         self.preview_temp_dir = Path(tempfile.mkdtemp(prefix="video-cut-preview-"))
 
         self.build_ui()
-        for variable in (self.remove_start_var, self.remove_end_var, self.set_cover_var):
-            variable.trace_add("write", lambda *_: self._selection_changed())
         for variable in (
             self.remove_start_var,
             self.remove_end_var,
@@ -662,6 +723,7 @@ class VideoCutApp:
             self.cover_seconds_var,
             self.precise_var,
             self.output_dir_var,
+            self.output_format_var,
         ):
             variable.trace_add("write", lambda *_: self._selection_changed())
         self._selection_changed()
@@ -912,12 +974,34 @@ class VideoCutApp:
         ]
         self.operation_controls += self.task_checks + self.task_spins + self.task_preview_buttons
 
+        format_row = ttk.Frame(operation_section)
+        format_row.grid(row=1, column=0, sticky="ew", pady=(7, 2))
+        format_row.columnconfigure(1, weight=1)
+        ttk.Label(format_row, text="输出格式").grid(row=0, column=0, sticky="w")
+        self.output_format_combo = ttk.Combobox(
+            format_row,
+            textvariable=self.output_format_var,
+            values=[OUTPUT_FORMAT_KEEP, OUTPUT_FORMAT_MP4],
+            state="readonly",
+            width=16,
+        )
+        self.output_format_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.operation_controls.append(self.output_format_combo)
+
+        ttk.Label(
+            operation_section,
+            textvariable=self.container_hint_var,
+            style="Hint.TLabel",
+            wraplength=430,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w", pady=(0, 4))
+
         self.precise_check = ttk.Checkbutton(
             operation_section,
             text="精确裁剪（逐帧重编码，较慢）",
             variable=self.precise_var,
         )
-        self.precise_check.grid(row=1, column=0, sticky="w", pady=(5, 3))
+        self.precise_check.grid(row=3, column=0, sticky="w", pady=(5, 3))
         self.operation_controls.append(self.precise_check)
 
         ttk.Label(
@@ -926,7 +1010,7 @@ class VideoCutApp:
             style="Hint.TLabel",
             wraplength=430,
             justify="left",
-        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+        ).grid(row=4, column=0, sticky="w", pady=(2, 0))
 
         # 3. Output path.
         path_section = ttk.LabelFrame(
@@ -1212,6 +1296,7 @@ class VideoCutApp:
             end_seconds is not None,
             cover_seconds is not None,
             self._selected_output_dir(input_path),
+            self._selected_output_extension(),
         )
         cover_path = Path("<cover.jpg>") if cover_seconds is not None else None
         try:
@@ -1346,6 +1431,7 @@ class VideoCutApp:
         self._stop_preview_playback()
         self.preview_request_id += 1
         self.input_var.set(str(path))
+        self.output_format_var.set(OUTPUT_FORMAT_KEEP)
         if self.use_source_dir_var.get():
             self.output_dir_var.set(str(path.parent))
         self._update_output_dir_controls()
@@ -1386,6 +1472,8 @@ class VideoCutApp:
 
         assert info is not None
         self.video_info = info
+        if path.suffix.lower() == ".mkv" and (info.get("video_codec") or "").lower() in {"h264", "avc1"}:
+            self.output_format_var.set(OUTPUT_FORMAT_MP4)
         duration = float(info["duration"])
         resolution = f"{info['width']}×{info['height']}" if info["width"] and info["height"] else "未知分辨率"
         codec = info["video_codec"].upper() if info["video_codec"] else "未知编码"
@@ -1401,6 +1489,54 @@ class VideoCutApp:
         self._update_command_preview()
         self._set_preview_controls_state()
         self._refresh_preview_frame()
+
+    def _selected_output_extension(self) -> Optional[str]:
+        return ".mp4" if self.output_format_var.get() == OUTPUT_FORMAT_MP4 else None
+
+    def _update_container_hint(self) -> None:
+        if self.output_format_var.get() != OUTPUT_FORMAT_MP4:
+            self.container_hint_var.set("保持源文件容器格式，不强制改变扩展名。")
+            return
+        info = self.video_info or {}
+        details = info.get("stream_details") or []
+        video_codec = (info.get("video_codec") or "").lower()
+        if video_codec and video_codec not in {"h264", "avc1"} and not self.precise_var.get():
+            self.container_hint_var.set(
+                "当前主视频不是 AVC/H.264。流复制到 MP4 可能不兼容，建议保持源格式或启用精确裁剪。"
+            )
+            return
+
+        audio_total = sum(1 for item in details if item.get("codec_type") == "audio")
+        audio_transcode = sum(
+            1 for item in details
+            if item.get("codec_type") == "audio"
+            and item.get("codec_name") not in MP4_AUDIO_COPY_CODECS
+        )
+        text_subtitles = sum(
+            1 for item in details
+            if item.get("codec_type") == "subtitle"
+            and item.get("codec_name") in TEXT_SUBTITLE_CODECS
+        )
+        other_subtitles = sum(
+            1 for item in details
+            if item.get("codec_type") == "subtitle"
+            and item.get("codec_name") not in TEXT_SUBTITLE_CODECS
+        )
+        attachment_count = sum(
+            1 for item in details
+            if item.get("codec_type") == "attachment"
+        )
+        parts = ["MP4 转换：主视频优先流复制"]
+        if audio_total:
+            if audio_transcode:
+                parts.append(f"{audio_transcode}/{audio_total} 条音频转 AAC")
+            else:
+                parts.append(f"{audio_total} 条音频直接复制")
+        if text_subtitles:
+            parts.append(f"{text_subtitles} 条文本字幕转 mov_text")
+        if other_subtitles or attachment_count:
+            parts.append("图形字幕/附件不写入 MP4")
+        self.container_hint_var.set("；".join(parts) + "。")
 
     def _selection_changed(self) -> None:
         remove_start = self.remove_start_var.get()
@@ -1440,10 +1576,12 @@ class VideoCutApp:
                         remove_end,
                         set_cover,
                         self._selected_output_dir(input_path),
+                        self._selected_output_extension(),
                     )
                 )
             )
         self._update_output_dir_controls()
+        self._update_container_hint()
         self._update_command_preview()
 
     def _set_preview_controls_state(self) -> None:
@@ -1781,6 +1919,14 @@ class VideoCutApp:
         if total_cut >= duration:
             raise ValueError("删除开头与结尾的秒数之和必须小于视频总时长。")
 
+        if self.output_format_var.get() == OUTPUT_FORMAT_MP4:
+            video_codec = (self.video_info.get("video_codec") or "").lower()
+            if video_codec not in {"h264", "avc1"} and not self.precise_var.get():
+                raise ValueError(
+                    "转换为 MP4 时，快速模式目前要求主视频为 AVC/H.264。"
+                    "请保持源格式，或勾选精确裁剪。"
+                )
+
         output_dir = self._selected_output_dir(input_path)
         if not self.use_source_dir_var.get():
             if not self.output_dir_var.get().strip():
@@ -1815,7 +1961,8 @@ class VideoCutApp:
             return
 
         set_cover = operations["cover"] is not None
-        if set_cover and input_path.suffix.lower() not in COVER_EXTENSIONS:
+        output_extension = self._selected_output_extension()
+        if set_cover and (output_extension or input_path.suffix).lower() not in COVER_EXTENSIONS:
             messagebox.showerror(
                 APP_TITLE,
                 "内嵌封面目前支持 MP4、M4V、MOV 文件。\n"
@@ -1845,6 +1992,7 @@ class VideoCutApp:
             operations["end"] is not None,
             set_cover,
             output_dir,
+            output_extension,
         )
         self.output_var.set(str(output_path))
         if output_path.exists():
