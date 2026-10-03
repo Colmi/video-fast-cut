@@ -2,24 +2,15 @@
 
 ## 当前版本
 
-VideoCutAssistant-v1.1.1.exe
+VideoCutAssistant-v1.2.0.exe
 
-## v1.1.1 修复
+## v1.2.0 新增
 
-- 修复部分 MKV 转换为 MP4 时出现：
-  `Could not find tag for codec none in stream ... codec not currently supported in container`
-- MP4 输出现在始终使用安全流映射，不再使用可能带入未知流的 `-map 0`。
-- 自动跳过 codec 为空、未知数据流、附件流和不兼容图形字幕。
-- 没有 ffprobe 流信息时，只保留主视频和音频，并将音频统一转为 AAC。
-
-## v1.1.0 功能
-
-- 支持将 MKV 中 AVC/H.264 主视频转换为 MP4。
-- 新增“输出格式”：保持源格式、转换为 MP4。
-- MKV + AVC 自动推荐 MP4。
-- 不兼容音频自动转 AAC。
-- 文本字幕转 MP4 mov_text。
-- MP4 自动启用 faststart。
+- 在“预览清晰度”右侧新增“仅前10分钟”切换按钮。
+- 时间轴可在完整视频和视频前 10 分钟之间切换。
+- 切换后，进度条、前后跳转、播放预览和“取预览”均限制在前 10 分钟内。
+- 便于更细致地选择封面时间。
+- 保留 MKV→MP4、codec none 安全映射、裁剪、封面和拖放功能。
 
 ## 构建
 

@@ -53,6 +53,7 @@ OUTPUT_FORMAT_KEEP = "保持源格式"
 OUTPUT_FORMAT_MP4 = "转换为 MP4"
 PREVIEW_FPS = 8
 PREVIEW_SECONDS = 20
+PREVIEW_SHORT_LIMIT_SECONDS = 600
 PREVIEW_QUALITY_OPTIONS = {
     "480×270（最快）": (480, 270),
     "560×315（快速）": (560, 315),
@@ -689,6 +690,7 @@ class VideoCutApp:
         self.preview_time_text = tk.StringVar(value="00:00.000 / 00:00.000")
         self.preview_quality_var = tk.StringVar(value=DEFAULT_PREVIEW_QUALITY)
         self.preview_info_var = tk.StringVar(value="选择视频后显示实际预览尺寸。")
+        self.preview_short_range_var = tk.BooleanVar(value=False)
         self.helper_text = tk.StringVar(value="")
         self.ffmpeg_path_var = tk.StringVar(value=FFMPEG or "")
         self.ffmpeg_status_var = tk.StringVar(value="正在检测 FFmpeg…")
@@ -817,7 +819,7 @@ class VideoCutApp:
 
         quality_row = ttk.Frame(preview_frame)
         quality_row.grid(row=1, column=0, sticky="ew", pady=(9, 2))
-        quality_row.columnconfigure(2, weight=1)
+        quality_row.columnconfigure(3, weight=1)
         ttk.Label(quality_row, text="预览清晰度").grid(row=0, column=0, sticky="w")
         self.preview_quality_combo = ttk.Combobox(
             quality_row,
@@ -828,12 +830,20 @@ class VideoCutApp:
         )
         self.preview_quality_combo.grid(row=0, column=1, padx=(8, 12), sticky="w")
         self.preview_quality_combo.bind("<<ComboboxSelected>>", lambda _event: self._preview_quality_changed())
+        self.preview_short_range_check = ttk.Checkbutton(
+            quality_row,
+            text="仅前10分钟",
+            variable=self.preview_short_range_var,
+            style="Toolbutton",
+            command=self._timeline_range_changed,
+        )
+        self.preview_short_range_check.grid(row=0, column=2, padx=(0, 12), sticky="w")
         ttk.Label(
             quality_row,
             textvariable=self.preview_info_var,
             style="Hint.TLabel",
-        ).grid(row=0, column=2, sticky="e")
-        self.preview_controls.append(self.preview_quality_combo)
+        ).grid(row=0, column=3, sticky="e")
+        self.preview_controls += [self.preview_quality_combo, self.preview_short_range_check]
 
         self.timeline_scale = ttk.Scale(
             preview_frame,
@@ -1241,6 +1251,27 @@ class VideoCutApp:
             target_height,
         )
 
+    def _timeline_limit_seconds(self) -> float:
+        duration = float((self.video_info or {}).get("duration") or 0.0)
+        if self.preview_short_range_var.get():
+            return min(duration, float(PREVIEW_SHORT_LIMIT_SECONDS))
+        return duration
+
+    def _configure_preview_timeline(self) -> None:
+        limit = max(self._timeline_limit_seconds(), 0.0)
+        scale_limit = max(limit - 0.001, 0.0)
+        self.timeline_scale.configure(from_=0, to=max(scale_limit, 0.001))
+        current = min(self.preview_time_var.get(), scale_limit)
+        self.preview_time_var.set(current)
+        self._update_preview_time_text(current)
+        self._update_preview_info()
+
+    def _timeline_range_changed(self) -> None:
+        if self.preview_playing:
+            self._stop_preview_playback()
+        self._configure_preview_timeline()
+        self._refresh_preview_frame()
+
     def _update_preview_info(self) -> None:
         info = self.video_info
         if not info:
@@ -1252,8 +1283,14 @@ class VideoCutApp:
         rotation = float(info.get("rotation") or 0.0)
         if int(round(rotation)) % 180 == 90:
             source_width, source_height = source_height, source_width
+        range_end = self._timeline_limit_seconds()
+        range_text = (
+            f"时间轴 0–{human_duration(range_end)}"
+            if self.preview_short_range_var.get()
+            else "时间轴 完整视频"
+        )
         self.preview_info_var.set(
-            f"预览输出 {output_width}×{output_height}｜源画面 {source_width}×{source_height}"
+            f"预览输出 {output_width}×{output_height}｜源画面 {source_width}×{source_height}｜{range_text}"
         )
 
     def _preview_quality_changed(self) -> None:
@@ -1487,8 +1524,9 @@ class VideoCutApp:
         self.info_var.set(
             f"时长 {human_duration(duration)}  |  {resolution}  |  {codec}  |  {audio}  |  {human_size(size)}"
         )
-        self.timeline_scale.configure(from_=0, to=max(duration - 0.001, 0.001))
-        initial_time = min(10.0, max(duration - 0.1, 0.0))
+        self._configure_preview_timeline()
+        initial_limit = self._timeline_limit_seconds()
+        initial_time = min(10.0, max(initial_limit - 0.1, 0.0))
         self._set_preview_time(initial_time, refresh=False)
         self.status_var.set("就绪")
         self._update_preview_info()
@@ -1628,12 +1666,12 @@ class VideoCutApp:
         self.preview_after_id = self.root.after(180, self._refresh_preview_frame)
 
     def _update_preview_time_text(self, seconds: float) -> None:
-        duration = float((self.video_info or {}).get("duration") or 0)
-        self.preview_time_text.set(f"{human_duration(seconds)} / {human_duration(duration)}")
+        limit = self._timeline_limit_seconds()
+        self.preview_time_text.set(f"{human_duration(seconds)} / {human_duration(limit)}")
 
     def _set_preview_time(self, seconds: float, refresh: bool = True) -> None:
-        duration = float((self.video_info or {}).get("duration") or 0)
-        seconds = max(0.0, min(seconds, max(duration - 0.001, 0.0)))
+        limit = self._timeline_limit_seconds()
+        seconds = max(0.0, min(seconds, max(limit - 0.001, 0.0)))
         self.preview_time_var.set(seconds)
         self._update_preview_time_text(seconds)
         if refresh:
@@ -1743,12 +1781,12 @@ class VideoCutApp:
         if not input_path.is_file():
             return
 
-        duration = float(self.video_info["duration"])
+        range_end = self._timeline_limit_seconds()
         start_time = self.preview_time_var.get()
-        if duration - start_time < 0.5:
+        if range_end - start_time < 0.5:
             start_time = 0.0
             self._set_preview_time(start_time, refresh=False)
-        preview_duration = min(float(PREVIEW_SECONDS), max(duration - start_time, 0.5))
+        preview_duration = min(float(PREVIEW_SECONDS), max(range_end - start_time, 0.5))
 
         self.preview_playback_token += 1
         token = self.preview_playback_token

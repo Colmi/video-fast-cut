@@ -7,6 +7,7 @@ Windows 桌面工具，使用系统 FFmpeg 对视频进行开头/结尾裁剪、
 - 删除开头、删除结尾、修改封面可任意多选，统一一次处理。
 - 视频文件可直接拖入地址栏。
 - 快速预览支持多档清晰度，并按原视频画幅显示，不强制补 16:9 黑边。
+- 预览时间轴可切换完整视频或仅前 10 分钟，便于精细选择封面。
 - 自动检测或手动指定 FFmpeg，显示当前版本和路径。
 - 实时显示当前操作对应的 FFmpeg 指令。
 - 输出目录默认跟随源视频，也可以手动指定其他目录。
@@ -25,7 +26,7 @@ https://github.com/Colmi/video-fast-cut/releases
 运行打包版：
 
 ```text
-release\VideoCutAssistant-v1.1.1.exe
+release\VideoCutAssistant-v1.2.0.exe
 ```
 
 运行源码版：
@@ -59,6 +60,7 @@ VERSION         版本号
 - 64 位 Windows
 - 系统 FFmpeg；程序会自动检测或允许手动指定
 - 运行源码版需要 Python 3.10 及以上
+
 
 
 
