@@ -285,6 +285,7 @@ def probe_video(video_path: Path) -> dict:
             "rotation": 0.0,
             "audio_streams": 0,
             "main_video_index": None,
+            "attached_pic_index": None,
             "video_stream_count": 1,
             "stream_indexes": [],
             "stream_details": [],
@@ -309,6 +310,7 @@ def probe_video(video_path: Path) -> dict:
     streams = data.get("streams", [])
     video_stream = None
     main_video_index = None
+    attached_pic_index = None
     video_stream_count = 0
     audio_streams = 0
     stream_indexes: list[int] = []
@@ -320,6 +322,8 @@ def probe_video(video_path: Path) -> dict:
         codec_name = stream.get("codec_name")
         disposition = stream.get("disposition") or {}
         is_attached_picture = bool(disposition.get("attached_pic"))
+        if is_attached_picture and isinstance(index, int) and attached_pic_index is None:
+            attached_pic_index = index
         if isinstance(index, int) and not is_attached_picture:
             stream_indexes.append(index)
             stream_details.append(
@@ -366,6 +370,7 @@ def probe_video(video_path: Path) -> dict:
         "rotation": rotation,
         "audio_streams": audio_streams,
         "main_video_index": main_video_index,
+        "attached_pic_index": attached_pic_index,
         "video_stream_count": max(video_stream_count, 1),
         "stream_indexes": stream_indexes,
         "stream_details": stream_details,
@@ -440,6 +445,28 @@ def extract_cover_image(input_path: Path, seconds: float, output_path: Path, vid
     if result.returncode != 0:
         details = (result.stdout or "").strip()
         raise RuntimeError(details or "无法从指定时间提取封面画面。")
+
+
+def extract_existing_cover(input_path: Path, output_path: Path, video_info: dict) -> None:
+    attached_pic_index = video_info.get("attached_pic_index")
+    if not isinstance(attached_pic_index, int):
+        raise RuntimeError("来源视频没有可提取的内嵌封面。请选择包含封面的视频，或改用“取预览”。")
+    command = [
+        FFMPEG,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-nostdin",
+        "-i", str(input_path),
+        "-map", f"0:{attached_pic_index}",
+        "-frames:v", "1",
+        "-q:v", "2",
+        "-y",
+        str(output_path),
+    ]
+    result = subprocess.run(command, **subprocess_options(), timeout=180)
+    if result.returncode != 0:
+        details = (result.stdout or "").strip()
+        raise RuntimeError(details or "无法提取来源视频的内嵌封面。")
 
 
 def build_operation_command(
@@ -659,8 +686,8 @@ class VideoCutApp:
     def __init__(self, root: tk.Tk, initial_path: Optional[Path] = None):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("1240x940")
-        self.root.minsize(1080, 800)
+        self.root.geometry("1240x960")
+        self.root.minsize(1080, 820)
         try:
             tkfont.nametofont("TkDefaultFont").configure(family="Microsoft YaHei UI", size=10)
             tkfont.nametofont("TkTextFont").configure(family="Microsoft YaHei UI", size=10)
@@ -980,22 +1007,10 @@ class VideoCutApp:
 
         self.cover_task_check = ttk.Checkbutton(tasks, text="修改封面", variable=self.set_cover_var)
         self.cover_task_check.grid(row=2, column=0, sticky="w", pady=3)
-        self.cover_seconds_spin = ttk.Spinbox(
-            tasks, from_=0.0, to=86400.0, increment=1.0,
-            textvariable=self.cover_seconds_var, width=9,
-        )
-        self.cover_seconds_spin.grid(row=2, column=1, sticky="e", padx=(8, 3), pady=3)
-        ttk.Label(tasks, text="秒").grid(row=2, column=2, sticky="w", pady=3)
-        self.cover_preview_button = ttk.Button(
-            tasks, text="用当前时间", command=lambda: self.use_preview_time_for(self.cover_seconds_var)
-        )
-        self.cover_preview_button.grid(row=2, column=3, padx=(8, 0), pady=3)
 
         self.task_checks = [self.start_task_check, self.end_task_check, self.cover_task_check]
-        self.task_spins = [self.start_seconds_spin, self.end_seconds_spin, self.cover_seconds_spin]
-        self.task_preview_buttons = [
-            self.start_preview_button, self.end_preview_button, self.cover_preview_button
-        ]
+        self.task_spins = [self.start_seconds_spin, self.end_seconds_spin]
+        self.task_preview_buttons = [self.start_preview_button, self.end_preview_button]
         self.operation_controls += self.task_checks + self.task_spins + self.task_preview_buttons
 
         self.cover_source_frame = ttk.LabelFrame(
@@ -1024,22 +1039,48 @@ class VideoCutApp:
         self.cover_sync_radio.pack(side="left", padx=(14, 0))
         self.operation_controls += [self.cover_preview_radio, self.cover_sync_radio]
 
-        cover_source_row = ttk.Frame(self.cover_source_frame)
-        cover_source_row.grid(row=1, column=0, sticky="ew", pady=(7, 0))
-        cover_source_row.columnconfigure(1, weight=1)
+        self.cover_preview_row = ttk.Frame(self.cover_source_frame)
+        self.cover_preview_row.grid(row=1, column=0, sticky="ew", pady=(7, 0))
+        self.cover_preview_row.columnconfigure(1, weight=1)
+        ttk.Label(self.cover_preview_row, text="时间（秒）").grid(row=0, column=0, sticky="w")
+        self.cover_seconds_spin = ttk.Spinbox(
+            self.cover_preview_row,
+            from_=0.0,
+            to=86400.0,
+            increment=1.0,
+            textvariable=self.cover_seconds_var,
+            width=10,
+        )
+        self.cover_seconds_spin.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.cover_preview_button = ttk.Button(
+            self.cover_preview_row,
+            text="取预览",
+            command=lambda: self.use_preview_time_for(self.cover_seconds_var),
+        )
+        self.cover_preview_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        self.operation_controls += [self.cover_seconds_spin, self.cover_preview_button]
+
+        self.cover_source_row = ttk.Frame(self.cover_source_frame)
+        self.cover_source_row.grid(row=2, column=0, sticky="ew", pady=(7, 0))
+        self.cover_source_row.columnconfigure(1, weight=1)
         self.cover_source_button = ttk.Button(
-            cover_source_row,
+            self.cover_source_row,
             text="选择视频…",
             command=self.choose_cover_source,
         )
         self.cover_source_button.grid(row=0, column=0, sticky="w")
         self.cover_source_entry = ttk.Entry(
-            cover_source_row,
+            self.cover_source_row,
             textvariable=self.cover_source_name_var,
             state="readonly",
         )
         self.cover_source_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
         self.operation_controls.append(self.cover_source_button)
+
+        if DND_AVAILABLE:
+            for target in (self.cover_source_entry, self.cover_source_button):
+                target.drop_target_register(DND_FILES)
+                target.dnd_bind("<<Drop>>", self._on_cover_source_drop)
 
         format_row = ttk.Frame(operation_section)
         format_row.grid(row=2, column=0, sticky="ew", pady=(7, 2))
@@ -1369,9 +1410,12 @@ class VideoCutApp:
             end_seconds = self._parse_task_seconds(
                 self.end_seconds_var.get(), "删除结尾", allow_zero=False
             ) if remove_end else None
-            cover_seconds = self._parse_task_seconds(
-                self.cover_seconds_var.get(), "封面时间", allow_zero=True
-            ) if set_cover else None
+            if set_cover and self.cover_mode_var.get() == COVER_MODE_SYNC:
+                cover_seconds = 0.0
+            else:
+                cover_seconds = self._parse_task_seconds(
+                    self.cover_seconds_var.get(), "封面时间", allow_zero=True
+                ) if set_cover else None
         except ValueError as exc:
             return str(exc)
 
@@ -1379,9 +1423,11 @@ class VideoCutApp:
         total_cut = (start_seconds or 0.0) + (end_seconds or 0.0)
         if total_cut >= duration:
             return "删除开头与结尾的秒数之和必须小于视频总时长。"
-        for label, value in (("删除开头", start_seconds), ("删除结尾", end_seconds), ("封面时间", cover_seconds)):
+        for label, value in (("删除开头", start_seconds), ("删除结尾", end_seconds)):
             if value is not None and value >= duration:
                 return f"{label}必须小于视频总时长（{human_duration(duration)}）。"
+        if self.cover_mode_var.get() == COVER_MODE_PREVIEW and cover_seconds is not None and cover_seconds >= duration:
+            return f"封面时间必须小于视频总时长（{human_duration(duration)}）。"
 
         input_path = Path(input_text).resolve()
         output_path = output_path_for(
@@ -1649,10 +1695,19 @@ class VideoCutApp:
 
         sync_mode = self.cover_mode_var.get() == COVER_MODE_SYNC
         radio_state = "normal" if cover_enabled and not self.working else "disabled"
+        preview_state = "normal" if cover_enabled and not sync_mode and not self.working else "disabled"
         source_state = "normal" if cover_enabled and sync_mode and not self.working else "disabled"
         self.cover_preview_radio.configure(state=radio_state)
         self.cover_sync_radio.configure(state=radio_state)
+        self.cover_seconds_spin.configure(state=preview_state)
+        self.cover_preview_button.configure(state=preview_state)
         self.cover_source_button.configure(state=source_state)
+        if sync_mode:
+            self.cover_preview_row.grid_remove()
+            self.cover_source_row.grid()
+        else:
+            self.cover_preview_row.grid()
+            self.cover_source_row.grid_remove()
 
     def choose_cover_source(self) -> None:
         initial_dir = str(Path(self.input_var.get()).parent) if self.input_var.get() else str(Path.cwd())
@@ -1664,9 +1719,16 @@ class VideoCutApp:
                 ("所有文件", "*.*"),
             ],
         )
-        if not path_text:
+        if path_text:
+            self._set_cover_source(Path(path_text))
+
+    def _set_cover_source(self, source_path: Path) -> None:
+        source_path = source_path.resolve()
+        if not source_path.is_file() or source_path.suffix.lower() not in VIDEO_EXTENSIONS:
+            messagebox.showwarning(APP_TITLE, "请选择支持格式的视频文件。", parent=self.root)
             return
-        source_path = Path(path_text).resolve()
+        self.set_cover_var.set(True)
+        self.cover_mode_var.set(COVER_MODE_SYNC)
         self.cover_source_var.set(str(source_path))
         self.cover_source_info = None
         self.cover_source_name_var.set(f"{source_path.name}（正在读取…）")
@@ -1677,6 +1739,22 @@ class VideoCutApp:
             args=(source_path, token),
             daemon=True,
         ).start()
+
+    def _on_cover_source_drop(self, event) -> str:
+        if self.working:
+            return "break"
+        try:
+            raw_items = self.root.tk.splitlist(event.data)
+        except tk.TclError:
+            raw_items = [event.data]
+        for raw_item in raw_items:
+            candidate = Path(str(raw_item).strip().strip('"'))
+            if candidate.is_file() and candidate.suffix.lower() in VIDEO_EXTENSIONS:
+                self._set_cover_source(candidate)
+                break
+        else:
+            messagebox.showwarning(APP_TITLE, "拖入内容中没有可识别的视频文件。", parent=self.root)
+        return "break"
 
     def _probe_cover_source_worker(self, source_path: Path, token: int) -> None:
         try:
@@ -1701,10 +1779,7 @@ class VideoCutApp:
             return
         assert info is not None
         self.cover_source_info = info
-        duration = float(info.get("duration") or 0.0)
-        self.cover_source_name_var.set(
-            f"{source_path.name}｜{human_duration(duration)}｜{info.get('width', 0)}×{info.get('height', 0)}"
-        )
+        self.cover_source_name_var.set(source_path.name)
 
     def _selection_changed(self) -> None:
         remove_start = self.remove_start_var.get()
@@ -1712,7 +1787,7 @@ class VideoCutApp:
         set_cover = self.set_cover_var.get()
         has_cut = remove_start or remove_end
 
-        task_states = (remove_start, remove_end, set_cover)
+        task_states = (remove_start, remove_end)
         for enabled, spinbox, button in zip(task_states, self.task_spins, self.task_preview_buttons):
             state = "normal" if enabled and not self.working else "disabled"
             spinbox.configure(state=state)
@@ -2081,9 +2156,12 @@ class VideoCutApp:
         end_seconds = self._parse_task_seconds(
             self.end_seconds_var.get(), "删除结尾", allow_zero=False
         ) if remove_end else None
-        cover_seconds = self._parse_task_seconds(
-            self.cover_seconds_var.get(), "封面时间", allow_zero=True
-        ) if set_cover else None
+        if set_cover and self.cover_mode_var.get() == COVER_MODE_SYNC:
+            cover_seconds = 0.0
+        else:
+            cover_seconds = self._parse_task_seconds(
+                self.cover_seconds_var.get(), "封面时间", allow_zero=True
+            ) if set_cover else None
 
         for label, value in (("删除开头", start_seconds), ("删除结尾", end_seconds)):
             if value is not None and value >= duration:
@@ -2102,10 +2180,9 @@ class VideoCutApp:
                 cover_source_info = self.cover_source_info
                 if not cover_source_info:
                     raise ValueError("封面来源视频信息尚未读取完成，请稍后再试。")
-                cover_limit = float(cover_source_info.get("duration") or 0.0)
-                if cover_seconds >= cover_limit:
+                if not isinstance(cover_source_info.get("attached_pic_index"), int):
                     raise ValueError(
-                        f"封面时间必须小于来源视频总时长（{human_duration(cover_limit)}）。"
+                        "来源视频没有内嵌封面，无法同步。请选择包含封面的视频，或改用“取预览”。"
                     )
             elif cover_seconds >= duration:
                 raise ValueError(f"封面时间必须小于视频总时长（{human_duration(duration)}）。")
@@ -2135,6 +2212,7 @@ class VideoCutApp:
             "cover": cover_seconds,
             "cover_source": str(cover_source_path) if cover_source_path else None,
             "cover_source_info": cover_source_info,
+            "cover_mode": self.cover_mode_var.get(),
         }
         expected_duration = duration - total_cut
         return input_path.resolve(), duration, operations, expected_duration, output_dir
@@ -2257,7 +2335,10 @@ class VideoCutApp:
                     else input_path
                 )
                 cover_info = operations.get("cover_source_info") or video_info
-                extract_cover_image(cover_input, float(operations["cover"]), cover_path, cover_info)
+                if operations.get("cover_mode") == COVER_MODE_SYNC:
+                    extract_existing_cover(cover_input, cover_path, cover_info)
+                else:
+                    extract_cover_image(cover_input, float(operations["cover"]), cover_path, cover_info)
 
             self._post(0, self.status_var.set, "正在统一处理视频…")
             command = build_operation_command(
@@ -2355,6 +2436,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
