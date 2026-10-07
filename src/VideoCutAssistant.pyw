@@ -53,6 +53,8 @@ OUTPUT_FORMAT_KEEP = "保持源格式"
 OUTPUT_FORMAT_MP4 = "转换为 MP4"
 COVER_MODE_PREVIEW = "preview"
 COVER_MODE_SYNC = "sync"
+COVER_MODE_IMAGE = "image"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 PREVIEW_FPS = 8
 PREVIEW_SECONDS = 20
 PREVIEW_SHORT_LIMIT_SECONDS = 600
@@ -469,6 +471,25 @@ def extract_existing_cover(input_path: Path, output_path: Path, video_info: dict
         raise RuntimeError(details or "无法提取来源视频的内嵌封面。")
 
 
+def convert_cover_image(input_path: Path, output_path: Path) -> None:
+    command = [
+        FFMPEG,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-nostdin",
+        "-i", str(input_path),
+        "-frames:v", "1",
+        "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-q:v", "2",
+        "-y",
+        str(output_path),
+    ]
+    result = subprocess.run(command, **subprocess_options(), timeout=180)
+    if result.returncode != 0:
+        details = (result.stdout or "").strip()
+        raise RuntimeError(details or "无法读取所选封面图片。")
+
+
 def build_operation_command(
     input_path: Path,
     output_path: Path,
@@ -709,6 +730,8 @@ class VideoCutApp:
         self.cover_mode_var = tk.StringVar(value=COVER_MODE_PREVIEW)
         self.cover_source_var = tk.StringVar(value="")
         self.cover_source_name_var = tk.StringVar(value="未选择封面来源视频")
+        self.cover_image_var = tk.StringVar(value="")
+        self.cover_image_name_var = tk.StringVar(value="未选择封面图片")
         self.output_var = tk.StringVar(value="")
         self.output_dir_var = tk.StringVar(value="")
         self.use_source_dir_var = tk.BooleanVar(value=True)
@@ -767,6 +790,7 @@ class VideoCutApp:
             self.output_dir_var,
             self.output_format_var,
             self.cover_mode_var,
+            self.cover_image_var,
         ):
             variable.trace_add("write", lambda *_: self._selection_changed())
         self._selection_changed()
@@ -1037,7 +1061,18 @@ class VideoCutApp:
             value=COVER_MODE_SYNC,
         )
         self.cover_sync_radio.pack(side="left", padx=(14, 0))
-        self.operation_controls += [self.cover_preview_radio, self.cover_sync_radio]
+        self.cover_image_radio = ttk.Radiobutton(
+            cover_mode_row,
+            text="指定封面",
+            variable=self.cover_mode_var,
+            value=COVER_MODE_IMAGE,
+        )
+        self.cover_image_radio.pack(side="left", padx=(14, 0))
+        self.operation_controls += [
+            self.cover_preview_radio,
+            self.cover_sync_radio,
+            self.cover_image_radio,
+        ]
 
         self.cover_preview_row = ttk.Frame(self.cover_source_frame)
         self.cover_preview_row.grid(row=1, column=0, sticky="ew", pady=(7, 0))
@@ -1081,6 +1116,27 @@ class VideoCutApp:
             for target in (self.cover_source_entry, self.cover_source_button):
                 target.drop_target_register(DND_FILES)
                 target.dnd_bind("<<Drop>>", self._on_cover_source_drop)
+
+        self.cover_image_row = ttk.Frame(self.cover_source_frame)
+        self.cover_image_row.grid(row=3, column=0, sticky="ew", pady=(7, 0))
+        self.cover_image_row.columnconfigure(1, weight=1)
+        self.cover_image_button = ttk.Button(
+            self.cover_image_row,
+            text="选择图片…",
+            command=self.choose_cover_image,
+        )
+        self.cover_image_button.grid(row=0, column=0, sticky="w")
+        self.cover_image_entry = ttk.Entry(
+            self.cover_image_row,
+            textvariable=self.cover_image_name_var,
+            state="readonly",
+        )
+        self.cover_image_entry.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.operation_controls.append(self.cover_image_button)
+        if DND_AVAILABLE:
+            for target in (self.cover_image_entry, self.cover_image_button):
+                target.drop_target_register(DND_FILES)
+                target.dnd_bind("<<Drop>>", self._on_cover_image_drop)
 
         format_row = ttk.Frame(operation_section)
         format_row.grid(row=2, column=0, sticky="ew", pady=(7, 2))
@@ -1410,7 +1466,7 @@ class VideoCutApp:
             end_seconds = self._parse_task_seconds(
                 self.end_seconds_var.get(), "删除结尾", allow_zero=False
             ) if remove_end else None
-            if set_cover and self.cover_mode_var.get() == COVER_MODE_SYNC:
+            if set_cover and self.cover_mode_var.get() in {COVER_MODE_SYNC, COVER_MODE_IMAGE}:
                 cover_seconds = 0.0
             else:
                 cover_seconds = self._parse_task_seconds(
@@ -1693,21 +1749,32 @@ class VideoCutApp:
         else:
             self.cover_source_frame.grid_remove()
 
-        sync_mode = self.cover_mode_var.get() == COVER_MODE_SYNC
+        mode = self.cover_mode_var.get()
+        sync_mode = mode == COVER_MODE_SYNC
+        image_mode = mode == COVER_MODE_IMAGE
         radio_state = "normal" if cover_enabled and not self.working else "disabled"
-        preview_state = "normal" if cover_enabled and not sync_mode and not self.working else "disabled"
+        preview_state = "normal" if cover_enabled and mode == COVER_MODE_PREVIEW and not self.working else "disabled"
         source_state = "normal" if cover_enabled and sync_mode and not self.working else "disabled"
+        image_state = "normal" if cover_enabled and image_mode and not self.working else "disabled"
         self.cover_preview_radio.configure(state=radio_state)
         self.cover_sync_radio.configure(state=radio_state)
+        self.cover_image_radio.configure(state=radio_state)
         self.cover_seconds_spin.configure(state=preview_state)
         self.cover_preview_button.configure(state=preview_state)
         self.cover_source_button.configure(state=source_state)
+        self.cover_image_button.configure(state=image_state)
         if sync_mode:
             self.cover_preview_row.grid_remove()
             self.cover_source_row.grid()
+            self.cover_image_row.grid_remove()
+        elif image_mode:
+            self.cover_preview_row.grid_remove()
+            self.cover_source_row.grid_remove()
+            self.cover_image_row.grid()
         else:
             self.cover_preview_row.grid()
             self.cover_source_row.grid_remove()
+            self.cover_image_row.grid_remove()
 
     def choose_cover_source(self) -> None:
         initial_dir = str(Path(self.input_var.get()).parent) if self.input_var.get() else str(Path.cwd())
@@ -1756,6 +1823,45 @@ class VideoCutApp:
             messagebox.showwarning(APP_TITLE, "拖入内容中没有可识别的视频文件。", parent=self.root)
         return "break"
 
+    def choose_cover_image(self) -> None:
+        initial_dir = str(Path(self.input_var.get()).parent) if self.input_var.get() else str(Path.cwd())
+        path_text = filedialog.askopenfilename(
+            title="选择封面图片",
+            initialdir=initial_dir,
+            filetypes=[
+                ("图片文件", "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if path_text:
+            self._set_cover_image(Path(path_text))
+
+    def _set_cover_image(self, image_path: Path) -> None:
+        image_path = image_path.resolve()
+        if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            messagebox.showwarning(APP_TITLE, "请选择 JPG、PNG、WebP、BMP 或 TIFF 图片。", parent=self.root)
+            return
+        self.set_cover_var.set(True)
+        self.cover_mode_var.set(COVER_MODE_IMAGE)
+        self.cover_image_var.set(str(image_path))
+        self.cover_image_name_var.set(image_path.name)
+
+    def _on_cover_image_drop(self, event) -> str:
+        if self.working:
+            return "break"
+        try:
+            raw_items = self.root.tk.splitlist(event.data)
+        except tk.TclError:
+            raw_items = [event.data]
+        for raw_item in raw_items:
+            candidate = Path(str(raw_item).strip().strip('"'))
+            if candidate.is_file() and candidate.suffix.lower() in IMAGE_EXTENSIONS:
+                self._set_cover_image(candidate)
+                break
+        else:
+            messagebox.showwarning(APP_TITLE, "拖入内容中没有可识别的封面图片。", parent=self.root)
+        return "break"
+
     def _probe_cover_source_worker(self, source_path: Path, token: int) -> None:
         try:
             info = probe_video(source_path)
@@ -1799,11 +1905,13 @@ class VideoCutApp:
             self.precise_var.set(False)
         self.start_button.configure(text="一键处理")
 
-        if set_cover and self.cover_mode_var.get() == COVER_MODE_SYNC:
+        if set_cover and self.cover_mode_var.get() == COVER_MODE_IMAGE:
+            self.helper_text.set("指定封面将使用所选图片，并转换为兼容 MP4 的 JPEG 封面流。")
+        elif set_cover and self.cover_mode_var.get() == COVER_MODE_SYNC:
             if has_cut:
-                self.helper_text.set("同步封面将从来源视频的相同时间点取帧，并与首尾裁剪一次完成。")
+                self.helper_text.set("同步封面将提取来源视频的内嵌封面，并与首尾裁剪一次完成。")
             else:
-                self.helper_text.set("同步封面将从来源视频的相同时间点取帧并嵌入当前输出视频。")
+                self.helper_text.set("同步封面将提取来源视频的内嵌封面并嵌入当前输出视频。")
         elif set_cover and has_cut:
             self.helper_text.set("三项任务可多选。封面时间按当前视频时间计算，首尾裁剪和封面一次完成。")
         elif set_cover:
@@ -2156,7 +2264,7 @@ class VideoCutApp:
         end_seconds = self._parse_task_seconds(
             self.end_seconds_var.get(), "删除结尾", allow_zero=False
         ) if remove_end else None
-        if set_cover and self.cover_mode_var.get() == COVER_MODE_SYNC:
+        if set_cover and self.cover_mode_var.get() in {COVER_MODE_SYNC, COVER_MODE_IMAGE}:
             cover_seconds = 0.0
         else:
             cover_seconds = self._parse_task_seconds(
@@ -2169,8 +2277,18 @@ class VideoCutApp:
 
         cover_source_path: Optional[Path] = None
         cover_source_info: Optional[dict] = None
+        cover_image_path: Optional[Path] = None
         if cover_seconds is not None:
-            if self.cover_mode_var.get() == COVER_MODE_SYNC:
+            if self.cover_mode_var.get() == COVER_MODE_IMAGE:
+                image_text = self.cover_image_var.get().strip().strip('"')
+                if not image_text:
+                    raise ValueError("请选择封面图片，或切换其他封面来源。")
+                cover_image_path = Path(image_text)
+                if not cover_image_path.is_file():
+                    raise ValueError("封面图片不存在，请重新选择。")
+                if cover_image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+                    raise ValueError("封面图片格式不受支持。")
+            elif self.cover_mode_var.get() == COVER_MODE_SYNC:
                 source_text = self.cover_source_var.get().strip().strip('"')
                 if not source_text:
                     raise ValueError("请选择封面来源视频，或切换为“取预览”。")
@@ -2212,6 +2330,7 @@ class VideoCutApp:
             "cover": cover_seconds,
             "cover_source": str(cover_source_path) if cover_source_path else None,
             "cover_source_info": cover_source_info,
+            "cover_image_source": str(cover_image_path) if cover_image_path else None,
             "cover_mode": self.cover_mode_var.get(),
         }
         expected_duration = duration - total_cut
@@ -2335,7 +2454,13 @@ class VideoCutApp:
                     else input_path
                 )
                 cover_info = operations.get("cover_source_info") or video_info
-                if operations.get("cover_mode") == COVER_MODE_SYNC:
+                cover_mode = operations.get("cover_mode")
+                if cover_mode == COVER_MODE_IMAGE:
+                    image_source = operations.get("cover_image_source")
+                    if not image_source:
+                        raise RuntimeError("未选择封面图片。")
+                    convert_cover_image(Path(image_source), cover_path)
+                elif cover_mode == COVER_MODE_SYNC:
                     extract_existing_cover(cover_input, cover_path, cover_info)
                 else:
                     extract_cover_image(cover_input, float(operations["cover"]), cover_path, cover_info)
